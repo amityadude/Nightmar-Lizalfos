@@ -108,7 +108,7 @@ constexpr s16 MODE_NM_DODGE = 100;
 
 constexpr int kPoolSize = 32;
 constexpr float kEngageRange = 620.0f;  // vanilla attack_init_range is 350; Nightmare closes in
-constexpr s16 kArmTicks = 26;            // how long a read keeps the guard up (~0.9 s at 30 fps)
+constexpr s16 kArmTicks = 40;            // how long a read keeps the guard up (~1.3 s at 30 fps)
 constexpr f32 kReadRange = 560.0f;       // swings it reads from up to here
 constexpr f32 kReadRangeWide = 680.0f;   // jump strikes and spins
 constexpr f32 kReadFaceCos = -0.1f;      // a narrow swing only counts if Link faces roughly toward it
@@ -133,6 +133,7 @@ inline int hold_frame_of(nm::Tactic t) {
 }
 // Last frame of an attack's hit window (vanilla's own at_chk_flag ranges); after it the swing is recovering.
 inline int attack_end_frame(int a) { return a == A_ATTACK_0 ? 28 : (a == A_ATTACK ? 30 : 41); }
+inline int attack_start_frame(int a) { return a == A_ATTACK_0 ? 22 : (a == A_ATTACK ? 13 : 33); }
 
 // ---------------------------------------------------------------------------------------------
 // Per-actor state. Plain data only (the pool zero-initialises it).
@@ -186,6 +187,7 @@ struct Brain {
     u8 landed[4];              // how often each kind of swing got through lately
     u8 last_kind;
     bool fast_swing, ran;
+    s16 prev_cut_type;
     f32 atk_rate_set;          // the animation rate the mod last set for the current swing
 
     // wind-up hold
@@ -273,16 +275,34 @@ bool read_swing(e_dn_class* dn, Brain* b, fopAc_ac_c* link, nm::SwingKind kind, 
 
 // Rewrites this frame's horizontal displacement. Vanilla already moved the actor during action();
 // BG collision (CrrPos) runs after that, so a rewritten displacement is still collided.
-void set_horizontal_delta(e_dn_class* dn, Brain* b, f32 dx, f32 dz) {
+void set_horizontal_delta(e_dn_class* dn, Brain* b, f32 dx, f32 dz, f32 cap = 36.0f) {
     // Per-frame cap: a hard bound on how far any mod-driven step can ever move (anti-clipping).
     const f32 mag = sqrtf(dx * dx + dz * dz);
-    if (mag > 36.0f) {
-        const f32 k = 36.0f / mag;
+    if (mag > cap) {
+        const f32 k = cap / mag;
         dx *= k;
         dz *= k;
     }
     ac(dn)->current.pos.x = b->before_x + dx;
     ac(dn)->current.pos.z = b->before_z + dz;
+}
+
+// A fast step (this frame's displacement, measured from where the frame started) may only replace
+// vanilla's own step if the straight path is free of walls and the landing spot has ground under it.
+bool step_clear(e_dn_class* dn, Brain* b, f32 dx, f32 dz) {
+    fopAc_ac_c* a = ac(dn);
+    cXyz start(b->before_x, b->before_y + 40.0f, b->before_z);
+    cXyz end(b->before_x + dx, b->before_y + 40.0f, b->before_z + dz);
+    dBgS_LinChk lin;
+    lin.Set(&start, &end, a);
+    if (dComIfG_Bgsp().LineCross(&lin)) {
+        return false;
+    }
+    dBgS_GndChk gnd;
+    cXyz probe(end.x, b->before_y + 60.0f, end.z);
+    gnd.SetPos(&probe);
+    const f32 gy = dComIfG_Bgsp().GroundCross(&gnd);
+    return !(gy == -G_CM3D_F_INF || gy < b->before_y - 120.0f);
 }
 
 void release_actor(e_dn_class* dn, Brain* b) {
@@ -415,7 +435,10 @@ void observe(e_dn_class* dn, Brain* b, daPy_py_c* pl, fopAc_ac_c* link, f32 dist
     const bool healing = fopAcM_GetName(link) == fpcNm_ALINK_e &&
                          ((daAlink_c*)link)->mProcID == daAlink_c::PROC_BOTTLE_DRINK;
 
-    if (cut_at && !b->prev_cut_at) {  // a swing just started
+    // A swing starts when the attack flag rises, or when the swing type changes mid-combo.
+    const int cut_type = (int)pl->getCutType();
+    const bool new_swing = cut_at && (!b->prev_cut_at || (cut_type != 0 && b->prev_cut_type != 0 && cut_type != b->prev_cut_type));
+    if (new_swing) {  // a swing just started
         nm::SwingKind kind = nm::SWING_SWORD;
         if (jumping || cut_bit == 0x100) {
             kind = nm::SWING_JUMP;
@@ -454,6 +477,7 @@ void observe(e_dn_class* dn, Brain* b, daPy_py_c* pl, fopAc_ac_c* link, f32 dist
     }
     if (cut_at && b->swing_age < 600) b->swing_age++;
     b->prev_cut_at = cut_at;
+    b->prev_cut_type = cut_at ? (s16)cut_type : 0;
 
     if (rolling && !b->prev_roll) {
         nm::mem_note_roll(b->mem);
@@ -536,7 +560,7 @@ void begin_attack(e_dn_class* dn, Brain* b, nm::Tactic t, bool chained) {
     b->hold_left = 0;
     b->hold_frame = (s16)hold_frame_of(t);
     b->atk_rate_set = 0.0f;
-    b->fast_swing = lvl >= nm::LEVEL_NIGHTMARE && cM_rndF(1.0f) < 0.4f;  // 40% of swings come out extra fast
+    b->fast_swing = lvl >= nm::LEVEL_NIGHTMARE && cM_rndF(1.0f) < 0.5f;  // half the swings come out extra fast
     if (lvl >= nm::LEVEL_NIGHTMARE && cM_rndF(1.0f) < nm::delay_chance(b->mem, b->enraged)) {
         b->hold_left = 3 + (s16)cM_rndF(6.0f);  // 3..8 frames, hard-bounded
     }
@@ -594,17 +618,17 @@ bool start_dodge(e_dn_class* dn, Brain* b, nm::Reaction r, s16 ang_to_link) {
         cand[2] = (s16)(ang_to_link + 0x8000);
     }
     for (int i = 0; i < 3; i++) {
-        if (!dir_clear(dn, cand[i], 300.0f)) {
+        if (!dir_clear(dn, cand[i], 340.0f)) {
             continue;
         }
         b->dodge_heading = cand[i];
         b->dodge_frames = 0;
-        b->dodge_speed = r == nm::REACT_DODGE_BACK ? 26.0f : 24.0f;
+        b->dodge_speed = r == nm::REACT_DODGE_BACK ? 46.0f : 42.0f;
         dn->action = A_FIGHT_RUN;
         dn->mode = MODE_NM_DODGE;
-        anm_init(dn, ANM_WAIT_02, 2.0f, J3DFrameCtrl::EMode_LOOP, 1.8f);  // the existing hop, faster
+        anm_init(dn, ANM_WAIT_02, 1.0f, J3DFrameCtrl::EMode_LOOP, 3.2f);  // the existing hop, much faster
         ac(dn)->speed.y = 11.0f;
-        b->dodge_cd = g_level >= nm::LEVEL_NIGHTMARE ? 12 : 150;
+        b->dodge_cd = g_level >= nm::LEVEL_NIGHTMARE ? 3 : 150;
         b->dodge_recent = 25;
         if (b->holding && dn->anm_p != nullptr) b->holding = false;  // the new animation resets the rate
         b->hold_left = 0;
@@ -638,12 +662,14 @@ bool read_swing(e_dn_class* dn, Brain* b, fopAc_ac_c* link, nm::SwingKind kind, 
     const int act = dn->action;
     const bool in_dodge = act == A_FIGHT_RUN && dn->mode == MODE_NM_DODGE;
     // Link attacks again right after it dodged, while it is still landing: it dodges again.
-    const bool double_dodge = in_dodge && b->dodge_recent > 0 && b->dodge_frames >= 6;
+    const bool double_dodge = in_dodge && b->dodge_recent > 0 && b->dodge_frames >= 3;
     const bool ready = (act == A_FIGHT_RUN && dn->mode >= 0 && !in_dodge) || act == A_GUARD;
     // A swing it is holding back, or already recovering from, is dropped for the guard/dodge.
     bool recovering = false;
     if (is_attack(act) && dn->anm_p != nullptr) {
-        recovering = b->holding || (int)dn->anm_p->getFrame() > attack_end_frame(act) + 1;
+        // Anything but the hit window itself: the wind-up (dropped for a guard/dodge), a held feint, or the recovery.
+        const int fr = (int)dn->anm_p->getFrame();
+        recovering = b->holding || fr > attack_end_frame(act) + 1 || fr < attack_start_frame(act) - 2;
     }
     if (!(ready || recovering || double_dodge)) {
         return false;
@@ -666,7 +692,7 @@ bool read_swing(e_dn_class* dn, Brain* b, fopAc_ac_c* link, nm::SwingKind kind, 
         return false;  // missed the read: this swing connects
     }
 
-    b->read_cd = 3;
+    b->read_cd = 1;
     b->streak_age = 0;
     b->streak++;
     if (b->streak >= nm::streak_limit(b->rage)) {
@@ -750,8 +776,8 @@ void decide(e_dn_class* dn, Brain* b, f32 dist, s16 ang) {
     }
 
     // Footwork: turn on the spot toward Link much faster than vanilla, so no attack starts facing away.
-    if (b->los && dist < 760.0f && !facing && (dn->mode == 0 || dn->mode == 1)) {
-        cLib_addCalcAngleS2(&ac(dn)->shape_angle.y, ang, 2, 0x1800);
+    if (b->los && dist < 900.0f && !facing && dn->mode <= 2) {
+        cLib_addCalcAngleS2(&ac(dn)->shape_angle.y, ang, 1, 0x4000);
         ac(dn)->current.angle.y = ac(dn)->shape_angle.y;
     }
 
@@ -763,7 +789,7 @@ void decide(e_dn_class* dn, Brain* b, f32 dist, s16 ang) {
 
     // 3) Engage: from further out and with almost no gap (vanilla waits 30..60 frames).
     if (b->atk_cooldown == 0 && dist < kEngageRange && b->los && facing && dn->timer[2] == 0) {
-        dn->timer[2] = 3 + (s16)cM_rndF(4.0f);
+        dn->timer[2] = 1;
         launch_attack(dn, b, dist, link_behind, false);
     }
 }
@@ -866,7 +892,11 @@ void action_pre(e_dn_class* dn) {
 
     if (lvl >= nm::LEVEL_NIGHTMARE) {
         // Vanilla waits 30..60 frames between attacks; never more than a few here.
-        if (dn->action == A_FIGHT_RUN && dn->timer[2] > 8) dn->timer[2] = 8;
+        if (dn->action == A_FIGHT_RUN && dn->timer[2] > 2) dn->timer[2] = 2;
+        // Chasing Link in plain sight: face him instantly, so vanilla never stops to turn and never loses a step.
+        if (dn->action == A_FIGHT_RUN && (dn->mode == 0 || dn->mode == 1) && b->los) {
+            a->current.angle.y = ang;
+        }
         // Guard counter: it blocked (or Link whiffed), so it leaves the guard and swings back at once.
         if (dn->action == A_GUARD && dn->mode >= 6 && b->expose == 0 && b->counter_window > 0 &&
             b->counter_delay == 0 && b->los && dist < kEngageRange) {
@@ -924,12 +954,12 @@ void action_post(e_dn_class* dn) {
         } else {
             b->chain_len = 0;
             b->combo_left = 0;
-            b->atk_cooldown = lvl >= nm::LEVEL_NIGHTMARE ? (b->enraged ? 0 : 2) : 0;
-            const s16 gap = lvl >= nm::LEVEL_NIGHTMARE ? (b->enraged ? 1 : 3) : 60;
+            b->atk_cooldown = 0;
+            const s16 gap = lvl >= nm::LEVEL_NIGHTMARE ? 0 : 60;
             if (dn->timer[2] > gap) dn->timer[2] = gap;
             // Hit and run: after its own swing it often hops aside rather than stand in Link's counter.
             if (lvl >= nm::LEVEL_NIGHTMARE && dist < 340.0f && b->dodge_cd == 0 && dn->objacch.ChkGroundHit() &&
-                cM_rndF(1.0f) < 0.5f) {
+                cM_rndF(1.0f) < 0.4f) {
                 start_dodge(dn, b, cM_rndF(1.0f) < 0.5f ? nm::REACT_DODGE_SIDE : nm::REACT_DODGE_BACK, ang);
             }
         }
@@ -942,7 +972,7 @@ void action_post(e_dn_class* dn) {
             // Re-apply whenever the animation rate is not the one the mod set (a new animation reset it).
             if (cur_rate > 0.01f && fabsf(cur_rate - b->atk_rate_set) > 0.02f) {
                 f32 mult = nm::attack_speed_mul(lvl, b->rage);
-                if (b->fast_swing) mult *= 1.25f;
+                if (b->fast_swing) mult *= 1.2f;
                 b->atk_rate_set = cur_rate * mult;
                 dn->anm_p->setPlaySpeed(b->atk_rate_set);
             }
@@ -1002,10 +1032,10 @@ void action_post(e_dn_class* dn) {
     if (cur == A_FIGHT_RUN && dn->mode == MODE_NM_DODGE) {
         if (dn->timer[2] < 2) dn->timer[2] = 2;  // keep vanilla from starting an attack mid-dodge
         const int f = ++b->dodge_frames;
-        const f32 v = f <= 8 ? b->dodge_speed : b->dodge_speed * (14 - f) / 6.0f;
-        bool stop = f >= 14 || !dir_clear(dn, b->dodge_heading, 90.0f);
+        const f32 v = f <= 5 ? b->dodge_speed : b->dodge_speed * (10 - f) / 5.0f;
+        bool stop = f >= 10 || !dir_clear(dn, b->dodge_heading, 110.0f);
         if (!stop) {
-            set_horizontal_delta(dn, b, cM_ssin(b->dodge_heading) * v, cM_scos(b->dodge_heading) * v);
+            set_horizontal_delta(dn, b, cM_ssin(b->dodge_heading) * v, cM_scos(b->dodge_heading) * v, 56.0f);
         } else {
             dn->mode = 0;  // hand back to vanilla's chase (it re-inits the run animation)
             if (lvl >= nm::LEVEL_NIGHTMARE && dist < kEngageRange + 100.0f && cM_rndF(1.0f) < 0.95f) {
@@ -1023,8 +1053,8 @@ void action_post(e_dn_class* dn) {
     const bool dash = dn->mode == 0 || dn->mode == 1;
     if (dash) {
         f32 mul = nm::speed_mul(lvl, b->rage);
-        if (nm::habit_runner(b->mem)) mul = nm::clampf(mul + 0.08f, 1.0f, 1.95f);  // chase a runner harder
-        if (b->prev_heal) mul = nm::clampf(mul + 0.1f, 1.0f, 1.95f);
+        if (nm::habit_runner(b->mem)) mul = nm::clampf(mul + 0.08f, 1.0f, 2.6f);  // chase a runner harder
+        if (b->prev_heal) mul = nm::clampf(mul + 0.1f, 1.0f, 2.6f);
         const f32 mag = sqrtf(dx0 * dx0 + dz0 * dz0);
         f32 ndx = dx0 * mul;
         f32 ndz = dz0 * mul;
@@ -1048,7 +1078,12 @@ void action_post(e_dn_class* dn) {
             ndz = cM_scos(h) * mag * mul;
         }
         if (mul > 1.0f || chasing_memory || (nm::habit_archer(b->mem) && dist > 350.0f)) {
-            set_horizontal_delta(dn, b, ndx, ndz);
+            // Fast steps (up to 64 units a frame) only replace vanilla's step when the path is free.
+            if (lvl < nm::LEVEL_NIGHTMARE) {
+                set_horizontal_delta(dn, b, ndx, ndz);
+            } else if (step_clear(dn, b, ndx, ndz)) {
+                set_horizontal_delta(dn, b, ndx, ndz, 64.0f);
+            }
         }
     } else if (dn->mode == 2 && lvl >= nm::LEVEL_NIGHTMARE && dist > 150.0f && dist < 650.0f) {
         // Circling hop (vanilla's "wait for an opening" mode): drift around Link instead of

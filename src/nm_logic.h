@@ -245,19 +245,19 @@ inline float counter_chance(int level, bool enraged) {
     if (level < LEVEL_NIGHTMARE) {
         return 0.0f;
     }
-    return enraged ? 0.97f : 0.92f;
+    return enraged ? 0.98f : 0.95f;
 }
 
 /** Probability that a launched attack holds its wind-up to catch an early dodge. */
 inline float delay_chance(const Memory& m, bool enraged) {
-    float p = 0.10f;
+    float p = 0.04f;
     if (habit_roller(m)) {
-        p += 0.20f;  // Link rolls a lot: mix up the timing
+        p += 0.06f;  // Link rolls a lot: mix up the timing, slightly
     }
     if (enraged) {
-        p -= 0.06f;  // fewer pauses when enraged
+        p -= 0.02f;  // fewer pauses when enraged
     }
-    return clampf(p, 0.03f, 0.35f);
+    return clampf(p, 0.01f, 0.12f);
 }
 
 /** Chance per engagement of a deliberate "false opening" (bait). Always rare. */
@@ -280,22 +280,22 @@ inline int interest_frames(int level) {
 
 /** Run-speed multiplier. Enrage adds a little on top; the total is capped. */
 inline float speed_mul(int level, float rage) {
-    float m = level >= LEVEL_NIGHTMARE ? 1.6f : (level == LEVEL_ADVANCED ? 1.1f : 1.0f);
+    float m = level >= LEVEL_NIGHTMARE ? 2.0f : (level == LEVEL_ADVANCED ? 1.1f : 1.0f);
     if (level >= LEVEL_NIGHTMARE) {
-        m += 0.3f * clampf(rage, 0.0f, 1.0f);
+        m += 0.5f * clampf(rage, 0.0f, 1.0f);
     } else if (rage > 0.0f) {
         m += 0.1f;
     }
-    return clampf(m, 1.0f, 1.95f);
+    return clampf(m, 1.0f, 2.6f);
 }
 
 /** Attack animation speed multiplier (applied on top of the Lazy Tweaks "slower enemies" speed). */
 inline float attack_speed_mul(int level, float rage) {
-    float m = level >= LEVEL_NIGHTMARE ? 1.6f : (level == LEVEL_ADVANCED ? 1.05f : 1.0f);
+    float m = level >= LEVEL_NIGHTMARE ? 2.4f : (level == LEVEL_ADVANCED ? 1.05f : 1.0f);
     if (level >= LEVEL_NIGHTMARE) {
-        m += 0.4f * clampf(rage, 0.0f, 1.0f);
+        m += 0.6f * clampf(rage, 0.0f, 1.0f);
     }
-    return clampf(m, 1.0f, 2.2f);
+    return clampf(m, 1.0f, 3.0f);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -307,28 +307,28 @@ inline float attack_speed_mul(int level, float rage) {
 
 /** 0 (calm) .. 1 (raging): grows with each hit Link lands, and is 1 at low health. */
 inline float rage_of(int hits, bool enraged) {
-    return enraged ? 1.0f : clampf((float)hits / 3.0f, 0.0f, 1.0f);
+    return enraged ? 1.0f : clampf((float)hits / 2.0f, 0.0f, 1.0f);
 }
 
 /** Chance to read a swing it has no particular history with, rising as Link repeats the move. */
 inline float read_chance(const Memory& m, bool recovering) {
     const float habit = clampf((float)m.repeat / (float)kRepeatCap, 0.0f, 1.0f);
-    const float c = clampf(0.93f + 0.06f * habit, 0.0f, 0.99f);
+    const float c = clampf(0.97f + 0.025f * habit, 0.0f, 0.995f);
     return recovering ? c * 0.95f : c;
 }
 
 /** Reads in a row before it leaves an opening. */
-inline int streak_limit(float rage) { return 8 + (int)(3.0f * clampf(rage, 0.0f, 1.0f)); }
+inline int streak_limit(float rage) { return 14 + (int)(4.0f * clampf(rage, 0.0f, 1.0f)); }
 
 /** Length (frames) of that opening. Never below 3 so it is always possible to punish. */
 inline int expose_ticks(float rage) {
-    const int t = (int)(8.0f * (1.0f - 0.5f * clampf(rage, 0.0f, 1.0f)));
+    const int t = (int)(6.0f * (1.0f - 0.5f * clampf(rage, 0.0f, 1.0f)));
     return t < 3 ? 3 : t;
 }
 
 /** Extra swings it can chain without a pause, and the chance each one follows the last. */
-inline int chain_max(float rage) { return 5 + (int)(2.0f * clampf(rage, 0.0f, 1.0f) + 0.5f); }
-static const float kChainChance = 0.95f;
+inline int chain_max(float rage) { return 9 + (int)(3.0f * clampf(rage, 0.0f, 1.0f) + 0.5f); }
+static const float kChainChance = 0.97f;
 
 /**
  * Odds of answering a read with a back-hop and with a side-hop (the rest is a guard). 'landed' is how
@@ -339,7 +339,7 @@ inline void dodge_odds(SwingKind kind, bool repeating, int landed, float& back, 
     side = 0.0f;
     switch (kind) {
     case SWING_JUMP: back = 0.15f; side = 0.85f; break;  // a jump strike is simply sidestepped
-    case SWING_SPIN: back = 0.70f; break;
+    case SWING_SPIN: back = 0.75f; break;
     default: back = 0.30f; side = 0.40f; break;
     }
     if (repeating) {
