@@ -20,19 +20,22 @@ Two settings in the in-game mods panel (saved in the mod's `config.json`):
 * **Advanced** (the fair tier): longer sight, slightly faster, raises its shield and sidesteps your swings. Blocks only what
   really hits the shield, no invulnerability, normal damage.
 * **Nightmare** (the brutal tier, modelled on a Darknut duelist mod):
-  * **It reads you.** The moment you press an attack it rolls a 93% to 99% chance to read it, snaps to face you and either
-    guards from any angle (the game's own guard state and invulnerability, held about 0.9 s) or hops away (back or sideways).
-    Jump strikes are always sidestepped. Spins are mostly back-hopped. Attack again while it is landing and it dodges again.
-  * **It punishes.** When your swing ends (blocked or missed), or after a dodge, it swings back within a couple of frames.
-    After its own swing it often hops aside rather than stand in your counter.
-  * **It is relentless and fast.** Attack gap of 2 to 3 frames (vanilla 30 to 60), engages from 620 units, chains 5 to 7 swings,
-    attack animations 1.6x (and 40% of swings 1.25x on top), run speed 1.6x, 3 to 8 frame feints, quick turning.
-  * **It gets fiercer.** Every hit you land adds rage (full after 3 hits, or at 35% health): faster swings and run, longer
+  * **It reads you.** The moment you press an attack (or change swing mid-combo) it rolls a 97% to 99.5% chance to read it,
+    from chase, guard, a dodge landing, or while winding up, holding or recovering from its own swing. It snaps to face you and
+    either guards from any angle (the game's own guard state and invulnerability, held about 1.3 s) or hops away (back or
+    sideways) at 42 to 46 units a frame. Jump strikes are always sidestepped, spins are mostly back-hopped, and attacking
+    again while it lands makes it dodge again.
+  * **It punishes.** When your swing ends (blocked or missed), after a dodge, or after a hit it shrugs off, it swings back
+    within 1 to 3 frames. After its own swing it often hops aside rather than stand in your counter.
+  * **It never stops.** No gap between attacks (vanilla 30 to 60 frames), engages from 620 units, chains 9 to 12 swings,
+    swings at 2.4x animation speed (half of them 1.2x faster again, up to 3.0x with rage), and runs at 2.0x to 2.6x vanilla
+    dash speed, turning to face you instantly. Fast runs are only applied when the path is free of walls and has ground.
+  * **It gets fiercer.** Every hit you land adds rage (full after 2 hits, or at 35% health): faster swings and run, longer
     chains, a shorter opening, and 1.5x more damage on top of the damage setting.
   * **Poise.** An ordinary hit costs it health but no stagger, and it swings straight back. Jump strikes, helm splitters, spins
     and hidden skills still knock it down, and so do lethal hits, so your finishers work.
-  * **It stays beatable.** After 8 reads in a row (up to 11 at full rage) it leaves a gap of 8 frames (down to 4 at full rage,
-    never below 3) where it drops its guard and does not read. Every hit you land resets the run. Its health is never changed.
+  * **It stays beatable, barely.** After 14 reads in a row (up to 18 at full rage) it drops its guard for 6 frames (down to 3
+    at full rage) and does not read. Every hit you land resets the run. Its health is never changed.
   * Still adapts: it remembers repeated moves, rolling, shield use, healing, arrows and backing away, and leans on the answer
     to them (see below).
 
@@ -58,7 +61,7 @@ shows which part is OFF ("Active hooks: ...").
    reads becomes an **opening** instead.
 2. **Guard counter**: when your swing ends while it is guarding, it leaves the guard and attacks.
 3. **Counter**: after a missed swing, a roll, a dodge or a shrugged-off hit, attack within 1 to 3 frames.
-4. **Engage**: attack from up to 620 units with a 3 to 6 frame gap, chain up to 5 to 7 swings, then often hop aside.
+4. **Engage**: attack from up to 620 units with no gap, chain 9 to 12 swings, then sometimes hop aside.
 
 Arrows are answered too: mostly a guard (from any angle), sometimes a side hop.
 
