@@ -14,6 +14,10 @@ namespace lnm {
 // Difficulty, kept in sync with the config var by mod.cpp. 0 = Disabled, 1 = Advanced, 2 = Nightmare.
 extern int g_level;
 
+// Optional diagnostics. mod.cpp sets g_log (printf-style) and g_debug (config var 'debug_log').
+extern void (*g_log)(const char* fmt, ...);
+extern bool g_debug;
+
 // Hooks around the vanilla file-local statics in d_a_e_dn.cpp.
 void action_pre(e_dn_class* dn);     // before action(): perceive, decide, react
 void action_post(e_dn_class* dn);    // after action():  footwork, combos, shield and bookkeeping

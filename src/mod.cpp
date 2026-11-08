@@ -44,6 +44,15 @@ void logf(LogLevel level, const char* format, ...) {
     svc_log->write(mod_ctx, level, buffer);
 }
 
+void dbg(const char* format, ...) {
+    char buffer[320];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    svc_log->write(mod_ctx, LOG_LEVEL_INFO, buffer);
+}
+
 const char* level_name(int level) {
     return level <= 0 ? "Disabled" : (level == 1 ? "Advanced" : "Nightmare");
 }
@@ -120,6 +129,19 @@ MOD_EXPORT ModResult mod_initialize(ModError* error) {
     svc_config->get_int(mod_ctx, g_var_difficulty, &stored);
     lnm::g_level = clamp_level(stored);
     svc_config->subscribe(mod_ctx, g_var_difficulty, on_difficulty_changed, nullptr, nullptr);
+
+    // Diagnostics: 'debug_log' (1 = on) prints what the Lizalfos AI decides to the Dusklight log.
+    ConfigVarDesc dbg_desc = CONFIG_VAR_DESC_INIT;
+    dbg_desc.name = "debug_log";
+    dbg_desc.type = CONFIG_VAR_INT;
+    dbg_desc.default_int = 1;
+    ConfigVarHandle dbg_var = 0;
+    int64_t dbg_on = 1;
+    if (svc_config->register_var(mod_ctx, &dbg_desc, &dbg_var) == MOD_OK) {
+        svc_config->get_int(mod_ctx, dbg_var, &dbg_on);
+    }
+    lnm::g_log = dbg;
+    lnm::g_debug = dbg_on != 0;
 
     // 2) Hooks. The AI hook is essential: without it there is nothing to do, so fail loudly.
     result = mods::hook::add_pre<DnAction>(on_action_pre);

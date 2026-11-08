@@ -23,6 +23,12 @@
 // Nothing is allocated per frame. Per-actor state lives in a fixed pool keyed by actor address
 // and process id.
 
+// Dusklight's dolphin/types.h (force-included on every translation unit) can define `nullptr` as a
+// macro on MSVC, which breaks standard-library headers. Drop it before anything else is parsed.
+#ifdef nullptr
+#undef nullptr
+#endif
+
 #include "lizalfos_nm.h"
 
 #include "nm_logic.h"
@@ -44,9 +50,16 @@
 
 #include <math.h>
 
+#define NM_DBG(...) \
+    do { \
+        if (g_debug && g_log) g_log(__VA_ARGS__); \
+    } while (0)
+
 namespace lnm {
 
 int g_level = nm::LEVEL_NIGHTMARE;
+void (*g_log)(const char* fmt, ...) = nullptr;
+bool g_debug = true;
 Capabilities g_caps = {};
 
 namespace {
@@ -87,6 +100,9 @@ constexpr s16 MODE_NM_DODGE = 100;
 constexpr int kPoolSize = 32;
 constexpr float kEngageRange = 400.0f;  // vanilla attack_init_range is 350; Nightmare closes in
 constexpr int kArcFront = 0x3000;       // ~67 degrees either side counts as "facing"
+
+// True on the 1st, (n+1)th, ... call for this counter: keeps the log readable.
+inline bool every(int& counter, int n) { return (counter++ % n) == 0; }
 
 inline bool is_attack(int a) { return a == A_ATTACK_0 || a == A_ATTACK || a == A_TAIL_ATTACK; }
 inline bool is_combat(int a) { return a == A_FIGHT_RUN || is_attack(a) || a == A_GUARD; }
@@ -382,6 +398,8 @@ void observe(e_dn_class* dn, Brain* b, daPy_py_c* pl, fopAc_ac_c* link, f32 dist
         b->pending_reaction = (u8)nm::react_to_swing(b->mem, lvl, kind, dist, guard_ok, dodge_ok, cM_rndF(1.0f),
                                                      cM_rndF(1.0f) * (rear_pressure ? 0.5f : 1.0f));
         b->pending_frames = lvl >= nm::LEVEL_NIGHTMARE ? (rear_pressure ? 1 : 3) : 8;
+        NM_DBG("[NM] Link swing kind=%d dist=%.0f facing=%d -> reaction=%d (0 none,1 guard,2 side,3 back)", (int)kind, dist,
+               (int)lizalfos_faces_link, (int)b->pending_reaction);
     } else if (!cut_at && b->prev_cut_at) {  // the swing just ended
         if (!b->swing_hit && lvl >= nm::LEVEL_NIGHTMARE && dist < kEngageRange + 80.0f &&
             cM_rndF(1.0f) < nm::counter_chance(lvl, b->enraged)) {
@@ -471,6 +489,8 @@ void launch_attack(e_dn_class* dn, Brain* b, f32 dist, bool link_behind, bool ch
     dn->action = (s16)action_of(t);
     dn->mode = 0;
     begin_attack(dn, b, t, chained);
+    NM_DBG("[NM] attack tactic=%d dist=%.0f chained=%d combo_left=%d hold=%d", (int)t, dist, (int)chained, (int)b->combo_left,
+           (int)b->hold_left);
     b->counter_window = 0;
     b->bait_window = 0;
 }
@@ -483,6 +503,7 @@ void start_guard(e_dn_class* dn, Brain* b) {
     dn->field_0x70c = ac(dn)->shape_angle.y;
     dn->timer[0] = 0;
     b->guard_cd = g_level >= nm::LEVEL_NIGHTMARE ? 60 : 110;
+    NM_DBG("[NM] guard raised");
 }
 
 bool start_dodge(e_dn_class* dn, Brain* b, nm::Reaction r, s16 ang_to_link) {
@@ -510,8 +531,10 @@ bool start_dodge(e_dn_class* dn, Brain* b, nm::Reaction r, s16 ang_to_link) {
         anm_init(dn, ANM_WAIT_02, 2.0f, J3DFrameCtrl::EMode_LOOP, 1.8f);  // the existing hop, faster
         ac(dn)->speed.y = 11.0f;
         b->dodge_cd = g_level >= nm::LEVEL_NIGHTMARE ? 80 : 150;
+        NM_DBG("[NM] dodge kind=%d heading=%d", (int)r, (int)cand[i]);
         return true;
     }
+    NM_DBG("[NM] dodge wanted but boxed in");
     return false;  // boxed in: no dodge (never clips, never teleports)
 }
 
@@ -595,6 +618,10 @@ void alert_others(e_dn_class* dn, Brain* b) {
 // Hook entry points
 // ---------------------------------------------------------------------------------------------
 void action_pre(e_dn_class* dn) {
+    static int s_calls = 0, s_gate_a = 0, s_gate_b = 0, s_beat = 0;
+    if (s_calls++ == 0) {
+        NM_DBG("[NM] action_pre is being called (level=%d)", g_level);
+    }
     Brain* b = brain_of(dn);
     b->active = false;
     b->snap.valid = false;
@@ -605,10 +632,18 @@ void action_pre(e_dn_class* dn) {
         return;
     }
     if (dn->status != 0 || dn->anm_p == nullptr || dn->actor.health <= 0 || dn->death_flag != 0) {
+        if (every(s_gate_a, 600)) {
+            NM_DBG("[NM] skip: status=%d anm_p=%d hp=%d death=%d", (int)dn->status, (int)(dn->anm_p != nullptr),
+                   (int)dn->actor.health, (int)dn->death_flag);
+        }
         return;  // not running yet, or dying: vanilla only
     }
     fopAc_ac_c* link = dComIfGp_getPlayer(0);
     if (link == nullptr || dComIfGp_event_runCheck() || dComIfGs_getLife() == 0) {
+        if (every(s_gate_b, 600)) {
+            NM_DBG("[NM] skip: link=%d event=%d life=%d", (int)(link != nullptr), (int)dComIfGp_event_runCheck(),
+                   (int)dComIfGs_getLife());
+        }
         return;  // cutscene / Link dead: leave everything to vanilla
     }
     daPy_py_c* pl = (daPy_py_c*)link;
@@ -648,6 +683,10 @@ void action_pre(e_dn_class* dn) {
     const s16 ang = fopAcM_searchPlayerAngleY(a);
 
     observe(dn, b, pl, link, dist, ang);
+    if (every(s_beat, 180)) {
+        NM_DBG("[NM] active: action=%d mode=%d dist=%.0f los=%d hp=%d/%d range=%.0f", (int)dn->action, (int)dn->mode, dist,
+               (int)b->los, (int)a->health, (int)b->max_hp, dn->pl_range);
+    }
 
     // Idle -> alerted is noticed in POST; here: keep chasing what we last saw. Vanilla gives up 40
     // frames after losing sight; extend that, but only while there is somewhere left to look.
@@ -850,6 +889,7 @@ void damage_pre(e_dn_class* dn) {
             }
             dn->cc_sph[i].ClrTgHit();
             b->swing_hit = true;
+            NM_DBG("[NM] shield blocked a hit");
         } else {
             b->swing_hit = true;
         }
@@ -933,6 +973,7 @@ void damage_post(e_dn_class* dn) {
         return;
     }
 
+    NM_DBG("[NM] poise: stagger absorbed, hp=%d", (int)a->health);
     // Poise: keep the damage vanilla already applied, undo only the stagger.
     dn->action = s.action;
     dn->mode = s.mode;
