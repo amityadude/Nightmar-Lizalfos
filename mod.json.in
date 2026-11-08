@@ -1,7 +1,7 @@
 {
-  "id": "com.example.my_mod",
-  "name": "My Mod",
+  "id": "nightmare_lizalfos",
+  "name": "Nightmare Lizalfos",
   "version": "@PROJECT_VERSION@",
-  "author": "You",
-  "description": "An example Dusklight mod"
+  "author": "Amityadude",
+  "description": "Adaptive Lizalfos AI with Disabled / Advanced / Nightmare difficulty: directional shield, evasion, counters, combos and poise. Damage is never reduced."
 }
