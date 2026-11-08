@@ -29,6 +29,13 @@ add_mod(nightmare_lizalfos
         TEXTURES_DIR textures  # texture replacements; remove if unused
 )
 
+# MSVC reports __cplusplus as 199711L unless told otherwise, and Dusklight's dolphin/types.h then
+# defines `nullptr` as 0, which breaks any standard-library header included afterwards
+# (error C2440 in <utility> / <xmemory>). This flag makes MSVC report the real value.
+if (MSVC)
+    target_compile_options(nightmare_lizalfos PRIVATE /Zc:__cplusplus)
+endif ()
+
 # Optional: the engine-independent decision logic has its own tests (no Dusklight needed to run
 # them). `cmake -DNIGHTMARE_LIZALFOS_TESTS=ON ..` adds the `test_nm_logic` target.
 option(NIGHTMARE_LIZALFOS_TESTS "Build the nm_logic unit tests" OFF)
