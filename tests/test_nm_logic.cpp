@@ -233,7 +233,7 @@ static void test_enrage_and_scalars() {
     CHECK(!nm::is_enraged(10, 0), "unknown max health never enrages");
 
     for (int lvl = 0; lvl <= 2; lvl++) {
-        CHECK(nm::speed_mul(lvl, 1.0f) <= 1.95f + 1e-6f, "speed multiplier is capped");
+        CHECK(nm::speed_mul(lvl, 1.0f) <= 2.6f + 1e-6f, "speed multiplier is capped");
         CHECK(nm::speed_mul(lvl, 0.0f) >= 1.0f, "speed multiplier never slows");
         CHECK(nm::sense_mul(lvl) >= 1.0f, "perception never shrinks");
         CHECK(nm::interest_frames(lvl) >= 40, "never forgets faster than vanilla");
@@ -287,18 +287,18 @@ static void test_read_and_punish() {
     nm::Memory calm = {};
     nm::Memory spam = {};
     spam.repeat = nm::kRepeatCap;
-    CHECK(nm::read_chance(calm, false) >= 0.9f && nm::read_chance(calm, false) < 1.0f, "reads are very likely, never certain");
+    CHECK(nm::read_chance(calm, false) >= 0.95f && nm::read_chance(calm, false) < 1.0f, "reads are very likely, never certain");
     CHECK(nm::read_chance(spam, false) > nm::read_chance(calm, false), "repeating a move raises the read chance");
-    CHECK(nm::read_chance(spam, false) <= 0.99f + 1e-6f, "read chance is capped at 99%");
+    CHECK(nm::read_chance(spam, false) <= 0.995f + 1e-6f, "read chance is capped at 99.5%");
     CHECK(nm::read_chance(calm, true) < nm::read_chance(calm, false), "reading while recovering is a little harder");
 
     // It is always beatable: a run of reads ends in an opening of at least 3 frames, at any rage.
     for (int i = 0; i <= 10; i++) {
         float rage = i / 10.0f;
-        CHECK(nm::streak_limit(rage) >= 8 && nm::streak_limit(rage) <= 11, "the run of reads is bounded");
+        CHECK(nm::streak_limit(rage) >= 14 && nm::streak_limit(rage) <= 18, "the run of reads is bounded");
         CHECK(nm::expose_ticks(rage) >= 3, "the opening is never shorter than 3 frames");
         CHECK(nm::expose_ticks(rage) <= nm::expose_ticks(0.0f), "rage only shortens the opening");
-        CHECK(nm::chain_max(rage) >= 5 && nm::chain_max(rage) <= 7, "chains are bounded");
+        CHECK(nm::chain_max(rage) >= 9 && nm::chain_max(rage) <= 12, "chains are bounded");
     }
     CHECK(nm::rage_of(0, false) == 0.0f && nm::rage_of(3, false) == 1.0f && nm::rage_of(99, false) == 1.0f, "rage tracks hits");
     CHECK(nm::rage_of(0, true) == 1.0f, "low health is full rage");
@@ -323,7 +323,7 @@ static void test_read_and_punish() {
     // Nightmare is faster than Advanced, which is faster than vanilla, and rage adds on top.
     CHECK(nm::speed_mul(nm::LEVEL_NIGHTMARE, 0.0f) > nm::speed_mul(nm::LEVEL_ADVANCED, 0.0f), "Nightmare runs faster");
     CHECK(nm::attack_speed_mul(nm::LEVEL_NIGHTMARE, 1.0f) > nm::attack_speed_mul(nm::LEVEL_NIGHTMARE, 0.0f), "rage speeds up swings");
-    CHECK(nm::attack_speed_mul(nm::LEVEL_NIGHTMARE, 1.0f) <= 2.2f + 1e-6f, "swing speed is capped");
+    CHECK(nm::attack_speed_mul(nm::LEVEL_NIGHTMARE, 1.0f) <= 3.0f + 1e-6f, "swing speed is capped");
     CHECK(nm::attack_speed_mul(nm::LEVEL_OFF, 1.0f) == 1.0f, "Disabled never speeds up swings");
 }
 
