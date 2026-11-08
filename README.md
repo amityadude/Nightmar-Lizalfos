@@ -4,90 +4,89 @@ A [Dusklight](https://github.com/TwilitRealm/dusklight) mod, built from
 [TwilitRealm/mod-template](https://github.com/TwilitRealm/mod-template), that gives the Lizalfos (`e_dn_class`)
 an adaptive combat AI. It changes only the Lizalfos. The game source, Link and every other enemy are untouched.
 
-> **Status: compiled and linked against the Dusklight v2.0.2 SDK, logic unit-tested. Not yet run in the game.**
-> Every behaviour below is implemented in source. None of it has been observed in-game, so expect to tune numbers.
+> **Status: compiled and linked against the Dusklight v2.0.2 SDK, logic unit-tested, and the hooks were confirmed
+> attaching in-game. The v2 behaviours below have not been play-tested yet**, so expect to tune numbers.
 
 ## Difficulty
 
-One setting, `difficulty`, saved in the mod's `config.json` and shown as a dropdown in the in-game mods panel
-(**Lizalfos difficulty**).
+Two settings in the in-game mods panel (saved in the mod's `config.json`):
 
-| Value | Name | What it does |
-|---|---|---|
-| 0 | Disabled | Vanilla Lizalfos. All mod state is released. |
-| 1 | Advanced | Longer sight, slightly faster chase, raises its shield and sidesteps your swings, remembers where it last saw you. |
-| 2 | **Nightmare** (default) | Everything in Advanced, plus adaptive memory, counters, combos, delayed attacks, bait, circling, enrage, poise, alerting nearby Lizalfos. |
+| Setting | Values |
+|---|---|
+| `difficulty` (**Lizalfos difficulty**) | 0 Disabled, 1 Advanced, **2 Nightmare (default)** |
+| `damage_level` (**Lizalfos damage**, Nightmare only) | 0 = x1 (vanilla), 1 = x2, **2 = x3 (default)**, 3 = x4, 4 = x6 |
 
-## Fairness rules
-
-* No invulnerability. The shield blocks only a hit whose attack object really struck the shield collision sphere.
-* Every confirmed hit still deals its normal damage. Poise removes the stagger, not the damage.
-* Nothing teleports. Every mod-driven step is capped at 36 units per frame, and BG collision (`CrrPos`) still runs after it.
-* No new hitboxes, animations or sounds. Attacks use the vanilla attack actions, so vanilla hit windows, sounds and animations play.
-* Death, scripted events, cutscenes, wolf-bite and hookshot interactions stay vanilla.
-* No per-frame allocation. State is a fixed pool of 32 slots.
+* **Disabled**: vanilla Lizalfos. All mod state is released.
+* **Advanced** (the fair tier): longer sight, slightly faster, raises its shield and sidesteps your swings. Blocks only what
+  really hits the shield, no invulnerability, normal damage.
+* **Nightmare** (the brutal tier, modelled on a Darknut duelist mod):
+  * **It reads you.** The moment you press an attack it rolls a 93% to 99% chance to read it, snaps to face you and either
+    guards from any angle (the game's own guard state and invulnerability, held about 0.9 s) or hops away (back or sideways).
+    Jump strikes are always sidestepped. Spins are mostly back-hopped. Attack again while it is landing and it dodges again.
+  * **It punishes.** When your swing ends (blocked or missed), or after a dodge, it swings back within a couple of frames.
+    After its own swing it often hops aside rather than stand in your counter.
+  * **It is relentless and fast.** Attack gap of 2 to 3 frames (vanilla 30 to 60), engages from 620 units, chains 5 to 7 swings,
+    attack animations 1.6x (and 40% of swings 1.25x on top), run speed 1.6x, 3 to 8 frame feints, quick turning.
+  * **It gets fiercer.** Every hit you land adds rage (full after 3 hits, or at 35% health): faster swings and run, longer
+    chains, a shorter opening, and 1.5x more damage on top of the damage setting.
+  * **Poise.** An ordinary hit costs it health but no stagger, and it swings straight back. Jump strikes, helm splitters, spins
+    and hidden skills still knock it down, and so do lethal hits, so your finishers work.
+  * **It stays beatable.** After 8 reads in a row (up to 11 at full rage) it leaves a gap of 8 frames (down to 4 at full rage,
+    never below 3) where it drops its guard and does not read. Every hit you land resets the run. Its health is never changed.
+  * Still adapts: it remembers repeated moves, rolling, shield use, healing, arrows and backing away, and leans on the answer
+    to them (see below).
 
 ## How it works
 
 The Lizalfos runs its whole brain in one file-local function, `action()`, which calls `damage_check()` first. A mod can
 only wrap whole functions, so the mod never replaces the vanilla AI:
 
-* **PRE `action()`** observes Link, decides, and switches the vanilla action or mode before vanilla runs.
-* **POST `action()`** adjusts movement, wind-up timing, combos and bookkeeping.
-* **PRE/POST `damage_check()`** does shield-by-collision and poise.
-* **PRE `daE_DN_Delete()`** frees the actor's state slot.
+* **PRE `action()`**: observes Link, reads his swings, decides, and switches the vanilla action or mode before vanilla runs.
+* **POST `action()`**: attack speed, movement, chaining, wind-up turning, guard hold and bookkeeping.
+* **PRE/POST `damage_check()`**: poise, and (Advanced) shield-by-collision.
+* **POST `daE_DN_Execute()`**: scales the damage of its sword and tail (Nightmare).
+* **PRE `daE_DN_Delete()`**: frees the actor's state slot.
 
 Hooks use the SDK's `src/d/actor/d_a_e_dn.cpp#<function>` aliases (`DEFINE_HOOK_SYMBOL`). If your Dusklight build has no
-`action` symbol, the mod refuses to load and says why. If only `damage_check` or `daE_DN_Delete` is missing, the AI still
-runs and the log and mods panel say which parts are off.
+`action` symbol, the mod refuses to load and says why. If another hook is missing, the rest still runs and the mods panel
+shows which part is OFF ("Active hooks: ...").
 
-### State machine and priorities (Nightmare)
+### Nightmare decision order
 
-Decisions run only while vanilla is in its plain chase state (`ACTION_FIGHT_RUN`), in this order:
+1. **Read** (runs the instant Link presses an attack, from chase, guard, a dodge landing, or while holding or recovering from
+   its own swing): guard (snap to face you, vanilla guard state, invulnerable) or dodge. A read that completes the run of
+   reads becomes an **opening** instead.
+2. **Guard counter**: when your swing ends while it is guarding, it leaves the guard and attacks.
+3. **Counter**: after a missed swing, a roll, a dodge or a shrugged-off hit, attack within 1 to 3 frames.
+4. **Engage**: attack from up to 620 units with a 3 to 6 frame gap, chain up to 5 to 7 swings, then often hop aside.
 
-1. A pending **reaction** to Link's swing or arrow, after a short reaction delay: raise the shield, sidestep or back-hop.
-2. A **counter** after a missed swing, a roll or healing: attack once the counter delay passes.
-3. A **bait** window: hold position and invite a swing, then lunge.
-4. **Engage**: start an attack at up to 400 units, with a shorter gap than vanilla.
-
-Between those, vanilla's own chase and circling hop run. The mod adds speed, last-seen steering and circling on top.
-
-### Shield and projectiles
-
-The shield is the vanilla guard action with the vanilla shield sphere. The mod removes vanilla's 5 and 15 frame guard
-invulnerability. A swing is blocked only when the same attack object touched the shield sphere and a body sphere. A swing
-from behind or the side reaches the body without crossing the shield and lands normally. Arrows are scanned every 4 frames.
-A frontal arrow raises the shield. A flank arrow triggers a sidestep at Nightmare.
-
-### Poise
-
-Before `damage_check()` the mod snapshots the stagger fields. If vanilla answers an ordinary hit with a small flinch or
-knock-down, the mod restores them and keeps the damage. It does **not** remove the stagger when the hit is lethal, when
-it is a wolf kick, or when it is a jump strike, helm splitter, spin attack or hidden skill. Those keep vanilla behaviour so
-Link's finishers still work.
+Arrows are answered too: mostly a guard (from any angle), sometimes a side hop.
 
 ### Adaptive memory
 
 Each Lizalfos keeps a small decayed memory of Link's habits: repeated sword swings and combos, jump attacks, arrows, rolls,
-shield use, retreating, attacks from behind and healing. Counts decay over time. Probabilities are hard-capped, so no habit
-turns into a guaranteed outcome. Examples:
+shield use, retreating, attacks from behind and healing. Counts decay over time. Probabilities are hard-capped. Examples:
 
 | Link habit | Response |
 |---|---|
-| Spams swings | More shield and sidestep reactions, then counter on the miss. |
-| Rolls a lot | Aims to end up behind Link and attacks as the roll recovers. |
+| Repeats a move | Higher read chance (up to 99%), more back-hops for spins and sword swings. |
+| A move keeps landing | It dodges that kind of swing up to 36% more for 20 seconds. |
+| Rolls a lot | Ends up behind Link and attacks as the roll recovers; more wind-up feints. |
 | Turtles behind the shield | Prefers the tail sweep and flanking. |
 | Favours arrows | Weaves while closing in. |
 | Runs away | Chases faster. |
 | Heals | Presses the attack for the healing window. |
-| Attacks from behind | Reacts a frame sooner and sidesteps about twice as often (the shield cannot cover the back). |
 
 ### Other tactics
 
 Sight range is widened through vanilla's own `pl_range`. Line of sight is a real ray cast every 4 frames (no wallhacks). When
-sight is lost it investigates the last-seen position for a bounded time. It alerts idle Lizalfos within 1500 units. It
-chains 2 or 3 attacks, delays the wind-up by 6 to 14 frames, enrages at low health, and checks for walls and drops before
-any mod-driven dodge or circling step.
+sight is lost it investigates the last-seen position for a bounded time. It alerts idle Lizalfos within 1500 units. Every
+mod-driven dodge checks for walls and drops first, and no step is longer than 36 units per frame.
+
+### Debug log
+
+`debug_log` (config, default 1) prints `[NM] ...` lines to the Dusklight Logs window: every read, guard, dodge, attack,
+opening and absorbed stagger. Set it to 0 to silence it.
 
 ## Building
 
@@ -152,10 +151,13 @@ Expected last line: `ALL TESTS PASSED`. The engine glue (`src/lizalfos_nm.cpp`) 
 
 ## Known limitations
 
-* **Untested in-game.** Hook symbol resolution, balance and the feel of every behaviour are unverified.
+* **Balance is untested.** The hooks attach in-game; the v2 Nightmare numbers have not been play-tested. Everything is in
+  `src/nm_logic.h` (probabilities, caps) and the constants at the top of `src/lizalfos_nm.cpp`.
+* Nightmare guards from any angle on purpose. If it feels unbeatable, lower the read chance or raise the opening in `nm_logic.h`.
 * The enum values of `d_a_e_dn.cpp` are file-local and mirrored in `lizalfos_nm.cpp`. If Dusklight renumbers them, update the mirror.
-* The vanilla `l_HIO` tuning block is unreachable from a mod, so the 400 unit engage range is a mod constant.
-* No new shield-bash animation, and no diagonal run-angle approach: both would need new assets or replacing vanilla code.
+* The vanilla `l_HIO` tuning block is unreachable from a mod, so the 620 unit engage range is a mod constant.
+* No new animations: every guard, dodge and swing reuses a vanilla one.
 * Wolf kick, hookshot and wolf-bite interactions stay vanilla. Heavy hits still knock down, by design.
+* Damage scaling needs the `daE_DN_Execute` hook. If it is OFF in the panel, Nightmare still works but hits for normal damage.
 * Speed multipliers scale displacement. The run animation is not re-timed, so very high speeds can look like foot sliding.
 * **Advanced** is untuned. Windows, macOS, iOS and Android builds come only from the template's CI and have never run.

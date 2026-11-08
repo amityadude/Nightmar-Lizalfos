@@ -3,5 +3,5 @@
   "name": "Nightmare Lizalfos",
   "version": "@PROJECT_VERSION@",
   "author": "Amityadude",
-  "description": "Adaptive Lizalfos AI with Disabled / Advanced / Nightmare difficulty: directional shield, evasion, counters, combos and poise. Damage is never reduced."
+  "description": "Hard Lizalfos AI with Disabled / Advanced / Nightmare difficulty. Nightmare reads your attacks and guards or dodges them, punishes misses, chains fast swings and hits harder, but leaves an opening after a run of reads."
 }
