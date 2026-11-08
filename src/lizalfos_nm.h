@@ -14,6 +14,9 @@ namespace lnm {
 // Difficulty, kept in sync with the config var by mod.cpp. 0 = Disabled, 1 = Advanced, 2 = Nightmare.
 extern int g_level;
 
+// Nightmare only: multiplier on the damage its sword and tail deal to Link (1 = vanilla).
+extern int g_damage_mult;
+
 // Optional diagnostics. mod.cpp sets g_log (printf-style) and g_debug (config var 'debug_log').
 extern void (*g_log)(const char* fmt, ...);
 extern bool g_debug;
@@ -24,6 +27,7 @@ void action_post(e_dn_class* dn);    // after action():  footwork, combos, shiel
 void damage_pre(e_dn_class* dn);     // before damage_check(): shield block by real collision
 void damage_post(e_dn_class* dn);    // after damage_check():  poise (no hitstun, damage kept)
 void actor_delete(e_dn_class* dn);   // daE_DN_Delete: free the actor's state slot
+void execute_post(e_dn_class* dn);   // after daE_DN_Execute(): damage scaling
 
 // Gives back everything the mod changed on live actors (sight range, held animations, mod
 // states) and clears the state pool. Called on mod shutdown and when the mod is disabled.
@@ -34,6 +38,7 @@ struct Capabilities {
     bool action;
     bool damage_check;
     bool actor_delete;
+    bool execute;
 };
 extern Capabilities g_caps;
 

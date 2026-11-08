@@ -30,10 +30,15 @@ IMPORT_OPTIONAL_SERVICE(UiService, svc_ui);
 DEFINE_HOOK_SYMBOL("src/d/actor/d_a_e_dn.cpp#action", void(e_dn_class*), DnAction);
 DEFINE_HOOK_SYMBOL("src/d/actor/d_a_e_dn.cpp#damage_check", void(e_dn_class*), DnDamageCheck);
 DEFINE_HOOK_SYMBOL("src/d/actor/d_a_e_dn.cpp#daE_DN_Delete", int(e_dn_class*), DnDelete);
+DEFINE_HOOK_SYMBOL("src/d/actor/d_a_e_dn.cpp#daE_DN_Execute", int(e_dn_class*), DnExecute);
 
 namespace {
 
 ConfigVarHandle g_var_difficulty = 0;
+ConfigVarHandle g_var_damage = 0;
+
+// Index in the 'Lizalfos damage' dropdown -> multiplier on its sword damage (vanilla = x1).
+const int kDamageMult[] = {1, 2, 3, 4, 6};
 
 void logf(LogLevel level, const char* format, ...) {
     char buffer[320];
@@ -58,6 +63,12 @@ const char* level_name(int level) {
 }
 
 int clamp_level(int64_t v) { return v < 0 ? 0 : (v > 2 ? 2 : (int)v); }
+int damage_mult_of(int64_t v) { return kDamageMult[v < 0 ? 0 : (v > 4 ? 4 : (int)v)]; }
+
+void on_damage_changed(ModContext*, ConfigVarHandle, const ConfigVarValue* value, const ConfigVarValue*, void*) {
+    lnm::g_damage_mult = damage_mult_of(value->int_value);
+    logf(LOG_LEVEL_INFO, "Lizalfos damage: x%d", lnm::g_damage_mult);
+}
 
 void on_difficulty_changed(ModContext*, ConfigVarHandle, const ConfigVarValue* value, const ConfigVarValue*, void*) {
     lnm::g_level = clamp_level(value->int_value);
@@ -79,6 +90,9 @@ HookAction on_damage_pre(ModContext*, void* args, void*, void*) {
 void on_damage_post(ModContext*, void* args, void*, void*) {
     lnm::damage_post(mods::arg<e_dn_class*>(args, 0));
 }
+void on_execute_post(ModContext*, void* args, void*, void*) {
+    lnm::execute_post(mods::arg<e_dn_class*>(args, 0));
+}
 HookAction on_delete_pre(ModContext*, void* args, void*, void*) {
     lnm::actor_delete(mods::arg<e_dn_class*>(args, 0));
     return HOOK_CONTINUE;
@@ -86,6 +100,7 @@ HookAction on_delete_pre(ModContext*, void* args, void*, void*) {
 
 // --- settings panel -------------------------------------------------------------------------
 const char* const kDifficultyOptions[] = {"Disabled", "Advanced", "Nightmare"};
+const char* const kDamageOptions[] = {"x1 (normal)", "x2", "x3", "x4", "x6"};
 
 ModResult build_panel(ModContext*, UiElementHandle panel, void*, ModError*) {
     svc_ui->pane_add_section(mod_ctx, panel, "Nightmare Lizalfos");
@@ -96,18 +111,30 @@ ModResult build_panel(ModContext*, UiElementHandle panel, void*, ModError*) {
     difficulty.help_rml =
         "<p><b>Disabled</b>: vanilla Lizalfos.</p>"
         "<p><b>Advanced</b>: longer sight, a little faster, raises its shield and sidesteps your swings.</p>"
-        "<p><b>Nightmare</b>: adapts to how you fight, counters missed swings, chains attacks, "
-        "circles you, resists hitstun and enrages at low health. Damage is never reduced.</p>";
+        "<p><b>Nightmare</b>: reads every swing you press and guards from any angle or dodges, "
+        "punishes misses, chains up to 5-7 fast swings, runs faster, resists hitstun and gets fiercer "
+        "with every hit you land. After a run of reads it leaves a short opening. Its health is not changed.</p>";
     difficulty.binding = UI_BINDING_CONFIG_VAR;
     difficulty.config_var = g_var_difficulty;
     difficulty.options = kDifficultyOptions;
     difficulty.option_count = 3;
     svc_ui->pane_add_control(mod_ctx, panel, &difficulty, nullptr);
 
-    char status[160];
-    std::snprintf(status, sizeof(status), "Active hooks: AI %s, shield/poise %s, cleanup %s.",
+    UiControlDesc damage = UI_CONTROL_DESC_INIT;
+    damage.kind = UI_CONTROL_DROPDOWN;
+    damage.label = "Lizalfos damage (Nightmare)";
+    damage.help_rml =
+        "<p>Multiplies the damage its sword and tail deal to you on Nightmare. x1 is the normal game.</p>";
+    damage.binding = UI_BINDING_CONFIG_VAR;
+    damage.config_var = g_var_damage;
+    damage.options = kDamageOptions;
+    damage.option_count = 5;
+    svc_ui->pane_add_control(mod_ctx, panel, &damage, nullptr);
+
+    char status[200];
+    std::snprintf(status, sizeof(status), "Active hooks: AI %s, shield/poise %s, damage %s, cleanup %s.",
                   lnm::g_caps.action ? "on" : "OFF", lnm::g_caps.damage_check ? "on" : "OFF",
-                  lnm::g_caps.actor_delete ? "on" : "OFF");
+                  lnm::g_caps.execute ? "on" : "OFF", lnm::g_caps.actor_delete ? "on" : "OFF");
     svc_ui->pane_add_text(mod_ctx, panel, status, nullptr);
     return MOD_OK;
 }
@@ -129,6 +156,17 @@ MOD_EXPORT ModResult mod_initialize(ModError* error) {
     svc_config->get_int(mod_ctx, g_var_difficulty, &stored);
     lnm::g_level = clamp_level(stored);
     svc_config->subscribe(mod_ctx, g_var_difficulty, on_difficulty_changed, nullptr, nullptr);
+
+    ConfigVarDesc damage_desc = CONFIG_VAR_DESC_INIT;
+    damage_desc.name = "damage_level";
+    damage_desc.type = CONFIG_VAR_INT;
+    damage_desc.default_int = 2;  // x3
+    if (svc_config->register_var(mod_ctx, &damage_desc, &g_var_damage) == MOD_OK) {
+        int64_t dmg = 2;
+        svc_config->get_int(mod_ctx, g_var_damage, &dmg);
+        lnm::g_damage_mult = damage_mult_of(dmg);
+        svc_config->subscribe(mod_ctx, g_var_damage, on_damage_changed, nullptr, nullptr);
+    }
 
     // Diagnostics: 'debug_log' (1 = on) prints what the Lizalfos AI decides to the Dusklight log.
     ConfigVarDesc dbg_desc = CONFIG_VAR_DESC_INIT;
@@ -171,6 +209,12 @@ MOD_EXPORT ModResult mod_initialize(ModError* error) {
         logf(LOG_LEVEL_WARN, "daE_DN_Delete() could not be hooked (%d): state slots are recycled lazily", (int)result);
     }
 
+    result = mods::hook::add_post<DnExecute>(on_execute_post);
+    lnm::g_caps.execute = result == MOD_OK;
+    if (!lnm::g_caps.execute) {
+        logf(LOG_LEVEL_WARN, "daE_DN_Execute() could not be hooked (%d): its damage stays vanilla", (int)result);
+    }
+
     // 3) Settings row.
     if (svc_ui != nullptr) {
         UiModsPanelDesc panel = UI_MODS_PANEL_DESC_INIT;
@@ -180,7 +224,7 @@ MOD_EXPORT ModResult mod_initialize(ModError* error) {
         }
     }
 
-    logf(LOG_LEVEL_INFO, "Nightmare Lizalfos ready. Difficulty: %s", level_name(lnm::g_level));
+    logf(LOG_LEVEL_INFO, "Nightmare Lizalfos ready. Difficulty: %s, damage x%d", level_name(lnm::g_level), lnm::g_damage_mult);
     return MOD_OK;
 }
 

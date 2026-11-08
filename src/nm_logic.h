@@ -123,11 +123,11 @@ inline float guard_chance(const Memory& m, int level, SwingKind kind) {
     if (level == LEVEL_ADVANCED) {
         return kind == SWING_SWORD ? 0.45f : 0.20f;
     }
-    float base = kind == SWING_SWORD ? 0.28f : (kind == SWING_SPIN ? 0.22f : 0.12f);
+    float base = kind == SWING_SWORD ? 0.50f : (kind == SWING_SPIN ? 0.42f : 0.28f);
     base += 0.10f * m.repeat;                  // same combo again and again
     base += 0.02f * clampf(m.sword, 0.0f, 6.0f);  // sustained sword pressure
     base += 0.03f * clampf(m.front, 0.0f, 4.0f);  // Link keeps attacking head-on
-    return clampf(base, 0.0f, 0.78f);
+    return clampf(base, 0.0f, 0.85f);
 }
 
 /** Chance of getting out of the way instead. Rolled only if the guard roll failed. */
@@ -138,9 +138,9 @@ inline float dodge_chance(const Memory& m, int level, SwingKind kind) {
     if (level == LEVEL_ADVANCED) {
         return kind == SWING_SWORD ? 0.15f : 0.30f;
     }
-    float base = kind == SWING_SWORD ? 0.34f : (kind == SWING_JUMP ? 0.60f : 0.50f);
+    float base = kind == SWING_SWORD ? 0.50f : (kind == SWING_JUMP ? 0.75f : 0.65f);
     base += 0.05f * m.repeat;
-    return clampf(base, 0.0f, 0.70f);
+    return clampf(base, 0.0f, 0.80f);
 }
 
 /**
@@ -245,19 +245,19 @@ inline float counter_chance(int level, bool enraged) {
     if (level < LEVEL_NIGHTMARE) {
         return 0.0f;
     }
-    return enraged ? 0.85f : 0.65f;
+    return enraged ? 0.97f : 0.92f;
 }
 
 /** Probability that a launched attack holds its wind-up to catch an early dodge. */
 inline float delay_chance(const Memory& m, bool enraged) {
-    float p = 0.18f;
+    float p = 0.10f;
     if (habit_roller(m)) {
-        p += 0.30f;  // Link rolls a lot: mix up the timing
+        p += 0.20f;  // Link rolls a lot: mix up the timing
     }
     if (enraged) {
-        p -= 0.08f;  // fewer pauses when enraged
+        p -= 0.06f;  // fewer pauses when enraged
     }
-    return clampf(p, 0.05f, 0.55f);
+    return clampf(p, 0.03f, 0.35f);
 }
 
 /** Chance per engagement of a deliberate "false opening" (bait). Always rare. */
@@ -279,21 +279,86 @@ inline int interest_frames(int level) {
 }
 
 /** Run-speed multiplier. Enrage adds a little on top; the total is capped. */
-inline float speed_mul(int level, bool enraged) {
-    float m = level >= LEVEL_NIGHTMARE ? 1.2f : (level == LEVEL_ADVANCED ? 1.1f : 1.0f);
-    if (enraged) {
+inline float speed_mul(int level, float rage) {
+    float m = level >= LEVEL_NIGHTMARE ? 1.6f : (level == LEVEL_ADVANCED ? 1.1f : 1.0f);
+    if (level >= LEVEL_NIGHTMARE) {
+        m += 0.3f * clampf(rage, 0.0f, 1.0f);
+    } else if (rage > 0.0f) {
         m += 0.1f;
     }
-    return clampf(m, 1.0f, 1.3f);
+    return clampf(m, 1.0f, 1.95f);
 }
 
 /** Attack animation speed multiplier (applied on top of the Lazy Tweaks "slower enemies" speed). */
-inline float attack_speed_mul(int level, bool enraged) {
-    float m = level >= LEVEL_NIGHTMARE ? 1.1f : (level == LEVEL_ADVANCED ? 1.05f : 1.0f);
-    if (enraged) {
-        m += 0.05f;
+inline float attack_speed_mul(int level, float rage) {
+    float m = level >= LEVEL_NIGHTMARE ? 1.6f : (level == LEVEL_ADVANCED ? 1.05f : 1.0f);
+    if (level >= LEVEL_NIGHTMARE) {
+        m += 0.4f * clampf(rage, 0.0f, 1.0f);
     }
-    return m;
+    return clampf(m, 1.0f, 2.2f);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Nightmare "read and punish" model. The moment Link presses an attack the Lizalfos rolls to
+// read it, answers with a guard or a dodge, and punishes the miss. Every read is counted; after
+// a run of reads it leaves a short opening, and every hit Link lands resets the run, so it can
+// always be beaten. All numbers live here so they can be tuned (and unit-tested) in one place.
+// ---------------------------------------------------------------------------------------------
+
+/** 0 (calm) .. 1 (raging): grows with each hit Link lands, and is 1 at low health. */
+inline float rage_of(int hits, bool enraged) {
+    return enraged ? 1.0f : clampf((float)hits / 3.0f, 0.0f, 1.0f);
+}
+
+/** Chance to read a swing it has no particular history with, rising as Link repeats the move. */
+inline float read_chance(const Memory& m, bool recovering) {
+    const float habit = clampf((float)m.repeat / (float)kRepeatCap, 0.0f, 1.0f);
+    const float c = clampf(0.93f + 0.06f * habit, 0.0f, 0.99f);
+    return recovering ? c * 0.95f : c;
+}
+
+/** Reads in a row before it leaves an opening. */
+inline int streak_limit(float rage) { return 8 + (int)(3.0f * clampf(rage, 0.0f, 1.0f)); }
+
+/** Length (frames) of that opening. Never below 3 so it is always possible to punish. */
+inline int expose_ticks(float rage) {
+    const int t = (int)(8.0f * (1.0f - 0.5f * clampf(rage, 0.0f, 1.0f)));
+    return t < 3 ? 3 : t;
+}
+
+/** Extra swings it can chain without a pause, and the chance each one follows the last. */
+inline int chain_max(float rage) { return 5 + (int)(2.0f * clampf(rage, 0.0f, 1.0f) + 0.5f); }
+static const float kChainChance = 0.95f;
+
+/**
+ * Odds of answering a read with a back-hop and with a side-hop (the rest is a guard). 'landed' is how
+ * many times this kind of swing got through lately: it dodges those more.
+ */
+inline void dodge_odds(SwingKind kind, bool repeating, int landed, float& back, float& side) {
+    back = 0.0f;
+    side = 0.0f;
+    switch (kind) {
+    case SWING_JUMP: back = 0.15f; side = 0.85f; break;  // a jump strike is simply sidestepped
+    case SWING_SPIN: back = 0.70f; break;
+    default: back = 0.30f; side = 0.40f; break;
+    }
+    if (repeating) {
+        if (kind == SWING_SWORD) {
+            back = 0.45f;
+            side = 0.40f;
+        } else if (kind == SWING_SPIN) {
+            back = 0.85f;
+        }
+    }
+    const float lb = clampf(0.12f * (float)landed, 0.0f, 0.36f);
+    if (back > 0.0f) {
+        back = clampf(back + lb, 0.0f, 0.95f);
+    } else {
+        side = clampf(side + lb, 0.0f, 0.95f);
+    }
+    if (back + side > 0.97f) {
+        side = 0.97f - back;
+    }
 }
 
 /** True when |yaw_diff| <= half_arc. Handles the s16 wrap (-32768) without overflow. */
