@@ -117,11 +117,11 @@ static void test_never_unbeatable() {
     for (int k = nm::SWING_SWORD; k <= nm::SWING_SPIN; k++) {
         float g = nm::guard_chance(worst, nm::LEVEL_NIGHTMARE, (nm::SwingKind)k);
         float d = nm::dodge_chance(worst, nm::LEVEL_NIGHTMARE, (nm::SwingKind)k);
-        CHECK(g <= 0.78f + 1e-6f, "guard chance is hard-capped");
-        CHECK(d <= 0.70f + 1e-6f, "dodge chance is hard-capped");
+        CHECK(g <= 0.85f + 1e-6f, "guard chance is hard-capped");
+        CHECK(d <= 0.80f + 1e-6f, "dodge chance is hard-capped");
         // With rolls just above the caps nothing is ever done: Link always has an opening.
         nm::Reaction r = nm::react_to_swing(worst, nm::LEVEL_NIGHTMARE, (nm::SwingKind)k, 200.0f,
-                                                  true, true, 0.79f, 0.71f);
+                                                  true, true, 0.86f, 0.81f);
         CHECK(r == nm::REACT_NONE, "a high roll always leaves Link an opening");
     }
 
@@ -233,13 +233,13 @@ static void test_enrage_and_scalars() {
     CHECK(!nm::is_enraged(10, 0), "unknown max health never enrages");
 
     for (int lvl = 0; lvl <= 2; lvl++) {
-        CHECK(nm::speed_mul(lvl, true) <= 1.3f + 1e-6f, "speed multiplier is capped");
-        CHECK(nm::speed_mul(lvl, false) >= 1.0f, "speed multiplier never slows");
+        CHECK(nm::speed_mul(lvl, 1.0f) <= 1.95f + 1e-6f, "speed multiplier is capped");
+        CHECK(nm::speed_mul(lvl, 0.0f) >= 1.0f, "speed multiplier never slows");
         CHECK(nm::sense_mul(lvl) >= 1.0f, "perception never shrinks");
         CHECK(nm::interest_frames(lvl) >= 40, "never forgets faster than vanilla");
     }
     CHECK(nm::interest_frames(0) == 40, "Disabled keeps vanilla interest time");
-    CHECK(nm::sense_mul(0) == 1.0f && nm::speed_mul(0, false) == 1.0f, "Disabled is the identity");
+    CHECK(nm::sense_mul(0) == 1.0f && nm::speed_mul(0, 0.0f) == 1.0f, "Disabled is the identity");
     CHECK(nm::delay_chance(nm::Memory{}, false) < nm::bait_chance(false) + 0.2f, "delays are occasional");
     nm::Memory roller = {};
     roller.roll = 5.0f;
@@ -282,6 +282,51 @@ static void test_pool_and_arc() {
     CHECK(!nm::in_arc((int16_t)-32768, 0x3800), "s16 minimum does not overflow");
 }
 
+static void test_read_and_punish() {
+    // The read chance is very high but never certain, and Link repeating a move only raises it a little.
+    nm::Memory calm = {};
+    nm::Memory spam = {};
+    spam.repeat = nm::kRepeatCap;
+    CHECK(nm::read_chance(calm, false) >= 0.9f && nm::read_chance(calm, false) < 1.0f, "reads are very likely, never certain");
+    CHECK(nm::read_chance(spam, false) > nm::read_chance(calm, false), "repeating a move raises the read chance");
+    CHECK(nm::read_chance(spam, false) <= 0.99f + 1e-6f, "read chance is capped at 99%");
+    CHECK(nm::read_chance(calm, true) < nm::read_chance(calm, false), "reading while recovering is a little harder");
+
+    // It is always beatable: a run of reads ends in an opening of at least 3 frames, at any rage.
+    for (int i = 0; i <= 10; i++) {
+        float rage = i / 10.0f;
+        CHECK(nm::streak_limit(rage) >= 8 && nm::streak_limit(rage) <= 11, "the run of reads is bounded");
+        CHECK(nm::expose_ticks(rage) >= 3, "the opening is never shorter than 3 frames");
+        CHECK(nm::expose_ticks(rage) <= nm::expose_ticks(0.0f), "rage only shortens the opening");
+        CHECK(nm::chain_max(rage) >= 5 && nm::chain_max(rage) <= 7, "chains are bounded");
+    }
+    CHECK(nm::rage_of(0, false) == 0.0f && nm::rage_of(3, false) == 1.0f && nm::rage_of(99, false) == 1.0f, "rage tracks hits");
+    CHECK(nm::rage_of(0, true) == 1.0f, "low health is full rage");
+
+    // Dodge odds stay valid probabilities for every kind, habit and landed count.
+    for (int k = nm::SWING_SWORD; k <= nm::SWING_SPIN; k++) {
+        for (int rep = 0; rep < 2; rep++) {
+            for (int landed = 0; landed <= 3; landed++) {
+                float back = -1.0f, side = -1.0f;
+                nm::dodge_odds((nm::SwingKind)k, rep != 0, landed, back, side);
+                CHECK(back >= 0.0f && side >= 0.0f && back + side <= 0.97f + 1e-6f, "dodge odds leave room for a guard");
+            }
+        }
+    }
+    float b0, s0, b3, s3;
+    nm::dodge_odds(nm::SWING_JUMP, false, 0, b0, s0);
+    CHECK(s0 > b0, "a jump strike is mostly sidestepped");
+    nm::dodge_odds(nm::SWING_SWORD, false, 0, b0, s0);
+    nm::dodge_odds(nm::SWING_SWORD, false, 3, b3, s3);
+    CHECK(b3 + s3 > b0 + s0, "a move that landed lately is dodged more");
+
+    // Nightmare is faster than Advanced, which is faster than vanilla, and rage adds on top.
+    CHECK(nm::speed_mul(nm::LEVEL_NIGHTMARE, 0.0f) > nm::speed_mul(nm::LEVEL_ADVANCED, 0.0f), "Nightmare runs faster");
+    CHECK(nm::attack_speed_mul(nm::LEVEL_NIGHTMARE, 1.0f) > nm::attack_speed_mul(nm::LEVEL_NIGHTMARE, 0.0f), "rage speeds up swings");
+    CHECK(nm::attack_speed_mul(nm::LEVEL_NIGHTMARE, 1.0f) <= 2.2f + 1e-6f, "swing speed is capped");
+    CHECK(nm::attack_speed_mul(nm::LEVEL_OFF, 1.0f) == 1.0f, "Disabled never speeds up swings");
+}
+
 int main() {
     test_strafe_geometry();
     test_memory_decay_and_adaptation();
@@ -290,6 +335,7 @@ int main() {
     test_tactics_and_combos();
     test_enrage_and_scalars();
     test_pool_and_arc();
+    test_read_and_punish();
     if (g_fail == 0) {
         std::printf("ALL TESTS PASSED\n");
         return 0;
